@@ -97,6 +97,16 @@ char checkProcessType(std::istringstream& is) {
 }
 
 /**
+ * Move the argument to the command vector and remove from overall vector
+ * @param cmd Command Vector
+ * @param inputVec Overall Vector
+ */
+void moveArgToCommand(StrVec& cmd, StrVec& inputVec, size_t index) {
+    cmd.push_back(inputVec.at(index));
+    inputVec.erase(inputVec.begin());  // remove from main input vector
+}
+
+/**
  * Convenience method to setup arguments (as pointers) 
  * and call the execvp system call
  * 
@@ -152,6 +162,7 @@ void runParallelFork(std::vector<int>& pids, StrVec& indCmd) {
     }
 }
 
+
 /**
  * Run the program in parallel when given the command
  * @param args
@@ -173,8 +184,7 @@ void parallel(StrVec& inputVec, char process) {
                 break;
             }
             // add to individual command vector
-            indCmd.push_back(inputVec.at(i));
-            inputVec.erase(inputVec.begin());  // remove from main input vector
+            moveArgToCommand(indCmd, inputVec, i);
         }
 
         printCommand(indCmd);  // print what will be ran
@@ -210,8 +220,7 @@ void serial(StrVec& inputVec, char process) {
                 break;
             }
             // add to individual command vector
-            indCmd.push_back(inputVec.at(i));
-            inputVec.erase(inputVec.begin());  // remove from main input vector
+            moveArgToCommand(indCmd, inputVec, i);
         }
         printCommand(indCmd);  // print what will be ran
 
@@ -267,6 +276,7 @@ void openClosePipes(StrVec& cmd1, StrVec& cmd2) {
     waitpid(pid2, nullptr, 0);
 }
 
+
 /**
  * Piped command so split into respective commands and then run
  * @param inputVec
@@ -289,12 +299,10 @@ void piped(StrVec& inputVec, char process) {
                 firstCmd = !firstCmd;
                 inputVec.erase(inputVec.begin());  // remove pipe
             } else { 
-                cmd1.push_back(inputVec.at(0));
-                inputVec.erase(inputVec.begin());  // remove from vector
+                moveArgToCommand(cmd1, inputVec, 0);
             }
         } else { 
-            cmd2.push_back(inputVec.at(0));
-            inputVec.erase(inputVec.begin());  // remove from main input vector
+            moveArgToCommand(cmd2, inputVec, 0);
         }
     }
 
