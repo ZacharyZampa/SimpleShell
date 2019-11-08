@@ -25,6 +25,9 @@
 using namespace std;
 using StrVec = std::vector<std::string>;
 
+const int READ  = 0;
+const int WRITE = 1;
+
 /**
  * Print the command in the vector
  * @param vec String Vector
@@ -80,7 +83,7 @@ void whatProcess(std::istream& in, std::string& type) {
 char checkProcessType(std::istringstream& is) {
     std::string type;
     is >> std::quoted(type);
-    
+
     if (type == "PARALLEL") {
         return 'p';
     } else if (type == "SERIAL") {
@@ -112,7 +115,6 @@ void myExec(StrVec& argList) {
     execvp(args[0], &args[0]);
 }
 
-
 /**
  * Run the actual shell process from the input commands
  * @param inputVec
@@ -133,7 +135,6 @@ void runShell(StrVec& inputVec) {
     }
 }
 
-
 /**
  * Run a fork in parallel
  * @param pids
@@ -148,7 +149,7 @@ void runParallelFork(std::vector<int>& pids, StrVec& indCmd) {
         // here if fails
         perror("execve failed");
         exit(-1);  // force exit with the child program with error: failed
-    } 
+    }
 }
 
 /**
@@ -218,33 +219,123 @@ void serial(StrVec& inputVec, char process) {
     }
 }
 
+/**
+ * Launch the actual process for the pipe
+ * @param cmd
+ * @param rw
+ * @param pipefd
+ * @return returns the pid
+ */
+int runPipe(StrVec& cmd, const int rw, int pipefd[]) {
+    // Fork -- make child process
+    const int pid = fork();
+    if (pid != 0) {
+        return pid;  // Parent process has nothing to do so return
+    }
+    
+    // now in child process
+    
+    // Close the ends of pipe not used
+    close(pipefd[!rw]);
+    // Tie end of the pipe to the input or output
+    dup2(pipefd[rw], rw);
+    // Raw args to be passed to command
+    std::vector<char*> args;   
+    for (std::string& arg : cmd) {
+        args.push_back(&arg[0]);  // Add pointer to argument
+    }
+    args.push_back(nullptr);
+    // Run the command
+    execvp(args[0], &args[0]);
+    return -1;  // if this is reached, there is an error
+}
 
+/**
+ * Open the pipes and close the pipes when finished running
+ * @param cmd1
+ * @param cmd2
+ */
+void openClosePipes(StrVec& cmd1, StrVec& cmd2) {
+    int pipefd[2];
+    pipe(pipefd);
+    const int pid1 = runPipe(cmd1, WRITE, pipefd);
+    const int pid2 = runPipe(cmd2, READ,  pipefd);
+    
+    // wait for commands to finish
+    waitpid(pid1, nullptr, 0);
+    close(pipefd[1]);  // close pipe so second command knows input is done
+    waitpid(pid2, nullptr, 0);
+}
+
+/**
+ * Piped command so split into respective commands and then run
+ * @param inputVec
+ * @param process
+ */
+void piped(StrVec& inputVec, char process) {
+    if (inputVec.size() == 0 || process != '|') {
+        return;
+    }
+
+    // piped so process
+    // separate into commands
+    StrVec cmd1;
+    StrVec cmd2;
+    bool firstCmd = true;
+    while (inputVec.size() > 0) {
+        if (firstCmd) {
+            if (inputVec.at(0) == "|") {
+                // first command is done -- hit pipe
+                firstCmd = !firstCmd;
+                inputVec.erase(inputVec.begin());  // remove pipe
+            } else { 
+                cmd1.push_back(inputVec.at(0));
+                inputVec.erase(inputVec.begin());  // remove from vector
+            }
+        } else { 
+            cmd2.push_back(inputVec.at(0));
+            inputVec.erase(inputVec.begin());  // remove from main input vector
+        }
+    }
+
+    // Run the commands
+    openClosePipes(cmd1, cmd2);
+}
 
 /**
  * Process the given command
  * @param inputVec
  * @param process
  */
-void processCommand(StrVec inputVec, char process) {
+void processCommand(StrVec& inputVec, char process) {
     if (process == 'r') {
         // regular process
         runShell(inputVec);
     } else if (process == 'p') {
         // PARALLEL process
         parallel(inputVec, process);
+    } else if (process == '|') {
+        // piped process
+        piped(inputVec, process);
     } else {
         // SERIAL
         serial(inputVec, process);
     }
 }
 
+void checkIfPiped(char& process, StrVec& inputVec) {
+    auto res = std::find(std::begin(inputVec), std::end(inputVec), "|");
+    if (res != std::end(inputVec)) {
+        process = '|';
+    }
+}
 
 /**
  * Process the input from a user and returns it as a String Vector
  * @param input stream
  * @return String vector
  */
-StrVec inputProcessing(std::istream& in, char process) {
+StrVec inputProcessing(std::istream& in, char& process) {
     StrVec inputVec;  // command vector
     std::string item;
     if (process == 'r') {
@@ -252,6 +343,8 @@ StrVec inputProcessing(std::istream& in, char process) {
         while (in >> std::quoted(item)) {
             inputVec.push_back(item);
         }
+        // check if it is piped at all
+        checkIfPiped(process, inputVec);
     } else {
         // process is PARALLEL or SERIAL - read from file line by line
         std::string line;
@@ -265,11 +358,11 @@ StrVec inputProcessing(std::istream& in, char process) {
                     inputVec.push_back(item);
                 }
                 // signal when reading command end
-                inputVec.push_back("next_command");  
+                inputVec.push_back("next_command");
             }
         }
     }
-    
+
     return inputVec;
 }
 
@@ -286,7 +379,7 @@ void processLoop(std::string& line, StrVec& inputVec, bool& exit) {
         // this is not a comment or blank line: PROCESS
         // create stringstream of line
         std::istringstream is(line);
-        
+
         // check if serial or parallel then process accordingly
         char process = checkProcessType(is);
         if (process == 'p') {
@@ -327,7 +420,7 @@ int main(int argc, char** argv) {
         // check if comment or blank
         bool exit = false;
         processLoop(line, inputVec, exit);
-        
+
         if (exit) {
             // exit command given, quit
             break;
